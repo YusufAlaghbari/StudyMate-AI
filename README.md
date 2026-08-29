@@ -1,6 +1,9 @@
 # StudyMate AI
 
 StudyMate AI is a grounded lecture assistant that lets students upload a PDF, ask questions in Arabic or English, receive page-level citations, and generate an interactive quiz from the same document.
+## Live Demo
+
+[Open StudyMate AI](https://study-mate-ai-theta.vercel.app/)
 
 ## Features
 
