@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+:root {
+  --paper: #f4f1e9;
+  --ink: #18221f;
+  --forest: #173f35;
+  --leaf: #3e7c63;
+  --clay: #c66a42;
+}
+
+* {
+  box-sizing: border-box;
+  scrollbar-color: rgba(23, 63, 53, 0.24) transparent;
+}
+
+html {
+  background: var(--paper);
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Segoe UI", Inter, Arial, Helvetica, sans-serif;
+}
+
+button,
+textarea,
+input {
+  font: inherit;
+}
+
+button:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible {
+  outline: 3px solid rgba(62, 124, 99, 0.28);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: #cfe0ce;
+  color: var(--forest);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-rise {
+  animation: rise 280ms ease-out both;
+}
