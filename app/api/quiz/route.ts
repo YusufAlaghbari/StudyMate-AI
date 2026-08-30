@@ -45,6 +45,41 @@ function normalizeQuizQuestion(value: unknown): QuizQuestion | null {
   };
 }
 
+function shuffle<T>(items: T[]): T[] {
+  const shuffled = [...items];
+
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[randomIndex]] = [shuffled[randomIndex], shuffled[index]];
+  }
+
+  return shuffled;
+}
+
+function balanceCorrectAnswers(questions: QuizQuestion[]): QuizQuestion[] {
+  const answerPositions = shuffle([
+    0,
+    1,
+    2,
+    3,
+    ...Array.from({ length: Math.max(0, questions.length - 4) }, () =>
+      Math.floor(Math.random() * 4),
+    ),
+  ]);
+
+  return questions.map((question, questionIndex) => {
+    const correctOption = question.options[question.correctIndex];
+    const incorrectOptions = shuffle(
+      question.options.filter((_, optionIndex) => optionIndex !== question.correctIndex),
+    );
+    const correctIndex = answerPositions[questionIndex];
+    const options = [...incorrectOptions];
+    options.splice(correctIndex, 0, correctOption);
+
+    return { ...question, options, correctIndex };
+  });
+}
+
 export async function POST(request: Request) {
   try {
     if (isRateLimited(request)) {
@@ -103,7 +138,7 @@ Required JSON structure:
       return Response.json({ error: "The quiz format was incomplete. Please try again." }, { status: 502 });
     }
 
-    return Response.json({ questions });
+    return Response.json({ questions: balanceCorrectAnswers(questions) });
   } catch (error) {
     if (error instanceof GeminiApiError) {
       return Response.json({ error: error.message }, { status: error.status });
