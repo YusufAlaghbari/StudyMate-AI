@@ -13,8 +13,47 @@ type QuizQuestion = {
   page: number;
 };
 
-function normalizeQuizQuestion(value: unknown): QuizQuestion | null {
-  if (!value || typeof value !== "object") return null;
+type QuizValidation = {
+  question: QuizQuestion | null;
+  issues: string[];
+};
+
+const QUIZ_RESPONSE_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    questions: {
+      type: "array",
+      minItems: 5,
+      maxItems: 5,
+      items: {
+        type: "object",
+        properties: {
+          question: { type: "string" },
+          options: {
+            type: "array",
+            minItems: 4,
+            maxItems: 4,
+            items: { type: "string" },
+          },
+          correctIndex: { type: "integer", minimum: 0, maximum: 3 },
+          explanation: { type: "string" },
+          page: { type: "integer", minimum: 1 },
+        },
+        required: ["question", "options", "correctIndex", "explanation", "page"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["questions"],
+  additionalProperties: false,
+};
+
+const QUIZ_GENERATION_ATTEMPTS = 2;
+
+function validateQuizQuestion(value: unknown): QuizValidation {
+  if (!value || typeof value !== "object") {
+    return { question: null, issues: ["not_an_object"] };
+  }
 
   const item = value as Record<string, unknown>;
   const options = Array.isArray(item.options)
@@ -22,26 +61,31 @@ function normalizeQuizQuestion(value: unknown): QuizQuestion | null {
     : [];
   const correctIndex = Number(item.correctIndex);
   const page = Number(String(item.page).replace(/[^0-9]/g, ""));
+  const issues: string[] = [];
 
-  if (
-    typeof item.question !== "string" ||
-    options.length !== 4 ||
-    !Number.isInteger(correctIndex) ||
-    correctIndex < 0 ||
-    correctIndex > 3 ||
-    typeof item.explanation !== "string" ||
-    !Number.isInteger(page) ||
-    page < 1
-  ) {
-    return null;
+  if (typeof item.question !== "string") issues.push("invalid_question");
+  if (!Array.isArray(item.options)) issues.push("options_not_array");
+  else if (item.options.length !== 4) issues.push("invalid_option_count");
+  if (Array.isArray(item.options) && options.length !== item.options.length) {
+    issues.push("non_string_option");
   }
+  if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex > 3) {
+    issues.push("invalid_correct_index");
+  }
+  if (typeof item.explanation !== "string") issues.push("invalid_explanation");
+  if (!Number.isInteger(page) || page < 1) issues.push("invalid_page");
+
+  if (issues.length > 0) return { question: null, issues };
 
   return {
-    question: item.question,
-    options,
-    correctIndex,
-    explanation: item.explanation,
-    page,
+    question: {
+      question: item.question as string,
+      options,
+      correctIndex,
+      explanation: item.explanation as string,
+      page,
+    },
+    issues,
   };
 }
 
@@ -113,32 +157,67 @@ Rules:
 - The page field must be the exact PDF page that supports the answer.
 - Never use outside knowledge or invent a page number.
 - Do not include Markdown symbols in any field.
-- Return JSON only, with no code fences.
-
-Required JSON structure:
-{"questions":[{"question":"...","options":["...","...","...","..."],"correctIndex":0,"explanation":"...","page":1}]}
 `.trim();
 
-    const result = await generateContent(apiKey, [pdfPart, { text: prompt }], {
-      maxOutputTokens: 2_500,
-      responseMimeType: "application/json",
-      temperature: 0.35,
-    });
-    const rawText = readGeneratedText(result);
+    for (let generationAttempt = 1; generationAttempt <= QUIZ_GENERATION_ATTEMPTS; generationAttempt += 1) {
+      const attemptPrompt =
+        generationAttempt === 1
+          ? prompt
+          : `${prompt}\n\nThe previous response was incomplete. Return all five questions with every required field.`;
+      const result = await generateContent(apiKey, [pdfPart, { text: attemptPrompt }], {
+        maxOutputTokens: 2_500,
+        responseMimeType: "application/json",
+        responseJsonSchema: QUIZ_RESPONSE_SCHEMA,
+        temperature: 0.35,
+      });
+      const rawText = readGeneratedText(result);
 
-    if (!rawText) {
-      return Response.json({ error: "No quiz was returned. Please try again." }, { status: 502 });
+      if (!rawText) {
+        console.warn(
+          `[StudyMate AI] Quiz generation attempt ${generationAttempt} returned no text.`,
+        );
+        continue;
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(rawText.replace(/^```json\s*/i, "").replace(/```$/i, "").trim());
+      } catch {
+        console.warn(
+          `[StudyMate AI] Quiz generation attempt ${generationAttempt} returned invalid JSON.`,
+          { responseLength: rawText.length },
+        );
+        continue;
+      }
+
+      const parsedObject =
+        parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+      const rawQuestions = Array.isArray(parsedObject?.questions) ? parsedObject.questions : [];
+      const validationResults = rawQuestions.map(validateQuizQuestion);
+      const questions = validationResults
+        .map(({ question }) => question)
+        .filter((question): question is QuizQuestion => question !== null);
+
+      if (rawQuestions.length === 5 && questions.length === 5) {
+        return Response.json({ questions: balanceCorrectAnswers(questions) });
+      }
+
+      console.warn(
+        `[StudyMate AI] Quiz generation attempt ${generationAttempt} returned an incomplete quiz.`,
+        {
+          rawQuestionCount: rawQuestions.length,
+          validQuestionCount: questions.length,
+          invalidQuestions: validationResults
+            .map(({ issues }, index) => ({ index, issues }))
+            .filter(({ issues }) => issues.length > 0),
+        },
+      );
     }
 
-    const parsed = JSON.parse(rawText.replace(/^```json\s*/i, "").replace(/```$/i, "").trim());
-    const rawQuestions = Array.isArray(parsed?.questions) ? parsed.questions : [];
-    const questions = rawQuestions.map(normalizeQuizQuestion).filter(Boolean) as QuizQuestion[];
-
-    if (questions.length !== 5) {
-      return Response.json({ error: "The quiz format was incomplete. Please try again." }, { status: 502 });
-    }
-
-    return Response.json({ questions: balanceCorrectAnswers(questions) });
+    return Response.json(
+      { error: "The quiz format was incomplete. Please try again." },
+      { status: 502 },
+    );
   } catch (error) {
     if (error instanceof GeminiApiError) {
       return Response.json({ error: error.message }, { status: error.status });
