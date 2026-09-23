@@ -17,6 +17,7 @@ type GeminiPart =
 type GenerationConfig = {
   maxOutputTokens: number;
   responseMimeType?: "application/json";
+  responseJsonSchema?: Record<string, unknown>;
   temperature?: number;
 };
 
